@@ -107,11 +107,18 @@ class Table:
             match = True
             for field, val in filters.items():
                 if field not in self.schema:
-                    continue
+                    raise InvalidTypeError(
+                        f"Поле '{field}' отсутствует в схеме таблицы '{self.name}'."
+                    )
+                
                 try:
                     typed_val = self._cast(str(val), self.schema[field])
                 except InvalidTypeError:
-                    continue
+                    raise InvalidTypeError(
+                        f"Неверный тип значения для поля '{field}'. "
+                        f"Ожидался тип {self.schema[field]}."
+                    )
+                
                 idx = list(self.schema.keys()).index(field)
                 if row[idx] != typed_val:
                     match = False
@@ -126,6 +133,10 @@ class Table:
                 new_row = list(row)
                 for field, raw in kwargs.items():
                     if field in self.schema:
+                        if field == "id":
+                            raise DatabaseError(
+                                "Поле 'id' является системным и не может быть изменено."
+                            )
                         idx = list(self.schema.keys()).index(field)
                         new_row[idx] = self._cast(raw, self.schema[field])
                 self._records[i] = tuple(new_row)
@@ -153,18 +164,41 @@ class Database:
     def create_table(self, name: str, fields_input: str) -> None:
         if name in self._tables:
             raise DatabaseError(f"Таблица '{name}' уже существует.")
+        
+        if not name.strip():
+            raise DatabaseError("Имя таблицы не может быть пустым.")
 
         schema = {}
         for part in fields_input.split(","):
             part = part.strip()
+            if not part:
+                continue
             if ":" in part:
                 fname, ftype = part.split(":", 1)
+                fname = fname.strip()
                 ftype = ftype.strip().lower()
+                
+                if fname == "id":
+                    raise DatabaseError(
+                        "Поле 'id' является системным и не может быть задано пользователем."
+                    )
+                
                 if ftype not in TYPE_MAP:
                     raise InvalidTypeError(f"Неподдерживаемый тип: {ftype}")
-                schema[fname.strip()] = ftype
+                
+                if fname in schema:
+                    raise DatabaseError(f"Поле '{fname}' уже определено в схеме.")
+                
+                schema[fname] = ftype
             else:
-                schema[part] = "str"
+                field_name = part.strip()
+                if field_name == "id":
+                    raise DatabaseError(
+                        "Поле 'id' является системным и не может быть задано пользователем."
+                    )
+                if field_name in schema:
+                    raise DatabaseError(f"Поле '{field_name}' уже определено в схеме.")
+                schema[field_name] = "str"
 
         self._tables[name] = Table(name, schema)
 

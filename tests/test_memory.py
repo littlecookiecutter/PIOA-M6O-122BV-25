@@ -30,6 +30,22 @@ class TestDatabase(unittest.TestCase):
         with self.assertRaises(TableNotFoundError):
             self.db.get_table("t")
 
+    def test_empty_table_name(self):
+        with self.assertRaises(DatabaseError):
+            self.db.create_table("", "x:str")
+        with self.assertRaises(DatabaseError):
+            self.db.create_table("   ", "x:str")
+
+    def test_protect_id_field_in_schema(self):
+        with self.assertRaises(DatabaseError):
+            self.db.create_table("t", "id:str, name:str")
+        with self.assertRaises(DatabaseError):
+            self.db.create_table("t", "name:str, id:int")
+
+    def test_duplicate_fields_in_schema(self):
+        with self.assertRaises(DatabaseError):
+            self.db.create_table("t", "name:str, name:int")
+
 
 class TestTableCRUD(unittest.TestCase):
     def setUp(self):
@@ -69,6 +85,16 @@ class TestTableCRUD(unittest.TestCase):
         self.assertEqual(len(res), 1)
         self.assertEqual(res[0][2], 2)
 
+    def test_select_filter_invalid_field(self):
+        self.table.create_record(name="A", age="1")
+        with self.assertRaises(InvalidTypeError):
+            self.table.select_record(invalid_field="X")
+
+    def test_select_filter_invalid_type(self):
+        self.table.create_record(name="A", age="1")
+        with self.assertRaises(InvalidTypeError):
+            self.table.select_record(age="not_a_number")
+
     def test_update_record(self):
         self.table.create_record(name="Old", age="10")
         self.table.update_record(1, name="New")
@@ -77,6 +103,11 @@ class TestTableCRUD(unittest.TestCase):
     def test_update_missing_record(self):
         with self.assertRaises(RecordNotFoundError):
             self.table.update_record(99, name="X")
+
+    def test_update_protect_id_field(self):
+        self.table.create_record(name="A", age="1")
+        with self.assertRaises(DatabaseError):
+            self.table.update_record(1, id=99)
 
     def test_delete_record(self):
         self.table.create_record(name="X", age="5")
