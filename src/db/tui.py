@@ -193,6 +193,7 @@ class DatabaseApp:
             print(f"Ошибка: {e}")
 
     def run(self) -> None:
+        """Запуск основного цикла интерфейса."""
         while True:
             try:
                 self._print_menu()
@@ -220,8 +221,9 @@ class DatabaseApp:
                     break
                 else:
                     print("Неизвестная команда.")
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, StopIteration):
                 print("\nВыход.")
                 break
             except Exception as e:
                 print(f"Критическая ошибка: {e}")
+                break

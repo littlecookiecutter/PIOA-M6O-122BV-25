@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from src.db.backend.memory import Database, Table
 from src.db.backend.errors import (
@@ -8,6 +9,7 @@ from src.db.backend.errors import (
     RecordNotFoundError,
     TableNotFoundError,
 )
+from src.db.tui import DatabaseApp
 
 
 class TestDatabase(unittest.TestCase):
@@ -170,6 +172,74 @@ class TestSemanticTypes(unittest.TestCase):
                 self.table._next_id = 1
                 rec = self.table.create_record(income="0", debt="0", active=raw)
                 self.assertIs(rec[3], expected)
+
+
+class TestTUI(unittest.TestCase):
+    """Тесты консольного интерфейса. Безопасный mock без StopIteration."""
+
+    def setUp(self):
+        self.app = DatabaseApp()
+
+    def _run_app(self, inputs: list[str]) -> None:
+        """Запускает приложение с имитацией ввода. При исчерпании списка возвращает '0'."""
+        input_iter = iter(inputs)
+        
+        def safe_input(prompt=""):
+            try:
+                return next(input_iter)
+            except StopIteration:
+                return "0"  # Гарантирует выход из цикла без зацикливания
+
+        with patch("builtins.input", side_effect=safe_input), \
+             patch("builtins.print"):
+            self.app.run()
+
+    def test_exit_command(self):
+        self._run_app(["0"])
+
+    def test_create_and_select_table(self):
+        self._run_app(["1", "users", "name:str, age:int", "2", "1"])
+
+    def test_add_and_display_records(self):
+        self._run_app([
+            "1", "t", "f:str",
+            "3", "val1",
+            "3", "val2",
+            "4"
+        ])
+
+    def test_filter_and_update_flow(self):
+        self._run_app([
+            "1", "t", "f:str",
+            "3", "A",
+            "3", "B",
+            "5", "A",
+            "6", "1", "C"
+        ])
+
+    def test_delete_record_and_table(self):
+        self._run_app([
+            "1", "t", "f:str",
+            "3", "X",
+            "7", "1",
+            "8", "1", "y"
+        ])
+
+    def test_sort_records_flow(self):
+        self._run_app([
+            "1", "t", "v:int",
+            "3", "10",
+            "3", "5",
+            "9", "v", "n"
+        ])
+
+    def test_error_handling_in_tui(self):
+        self._run_app([
+            "3",           # Попытка добавить запись без выбранной таблицы
+            "1", "t", "f:bad", # Ошибка: неизвестный тип
+            "99",          # Неизвестная команда меню
+            "2",           # Выбор таблицы при пустом списке
+        ])
 
 
 if __name__ == "__main__":
