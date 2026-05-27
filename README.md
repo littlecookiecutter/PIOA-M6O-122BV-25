@@ -58,7 +58,7 @@ python -m src.db
 pip install pytest pytest-cov
 
 # Запуск тестов с отчётом по покрытию
-pytest tests/ --cov=src/db/backend --cov-report=term-missing
+pytest tests/ --cov=src --cov-report=term-missing
 ```
 Цель: покрытие модуля `src/db/backend` не менее 80%.
 
