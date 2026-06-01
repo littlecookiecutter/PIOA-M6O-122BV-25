@@ -1,239 +1,155 @@
-from .backend import memory
+from .backend.memory import MemoryDatabase
+from .backend.json_db import JSONDatabase
+from .backend.csv_db import CSVDatabase
+from .backend.base import Database
+from .backend.errors import DatabaseError
 
-current_table: str | None = None
+AVAILABLE_TYPES = ["str", "int", "float", "bool", "int_pos", "int_neg", "float_pos", "float_neg"]
 
+class TUI:
+    def __init__(self) -> None:
+        self.db: Database = MemoryDatabase()
+        self.current: str | None = None
 
-def _print_menu() -> None:
-    print("\n=== In-Memory База Данных ===")
-    if current_table:
-        print(f"Текущая таблица: {current_table}")
-    else:
-        print("[!] Таблица не выбрана")
-    print("1. Создать таблицу")
-    print("2. Выбрать таблицу")
-    print("3. Добавить запись")
-    print("4. Показать все записи")
-    print("5. Найти по фильтру")
-    print("6. Обновить запись")
-    print("7. Удалить запись")
-    print("8. Удалить таблицу")
-    print("0. Выход")
+    def _print_menu(self) -> None:
+        print("\n=== Главное меню ===")
+        print(f"Текущая таблица: {self.current or 'Не выбрана'}")
+        print(f"Режим: {self._get_mode_name()}")
+        print("1. Создать таблицу  2. Выбрать  3. Добавить  4. Показать")
+        print("5. Найти  6. Обновить  7. Удалить запись  8. Удалить таблицу")
+        print("9. Сортировать  10. Индекс  11. Сменить режим  0. Выход")
 
+    def _get_mode_name(self) -> str:
+        if isinstance(self.db, JSONDatabase): return "JSON"
+        if isinstance(self.db, CSVDatabase): return "CSV"
+        return "Memory"
 
-def _read_int(prompt: str) -> int:
-    while True:
-        raw = input(prompt).strip()
-        try:
-            return int(raw)
-        except ValueError:
-            print("Ошибка: введите целое число.")
+    def _read_int(self, prompt: str) -> int:
+        while True:
+            try: return int(input(prompt).strip())
+            except ValueError: print("Ошибка: введите целое число.")
 
-
-def _create_table_ui() -> None:
-    global current_table
-    print("\nСоздание новой таблицы")
-    name = input("Имя таблицы: ").strip()
-    
-    print("Пример: name:str, age:int, salary:float")
-    fields_input = input("Поля (имя:тип): ").strip()
-
-    if not fields_input:
-        print("Ошибка: укажите хотя бы одно поле.")
-        return
-
-    try:
-        memory.create_table(name, fields_input)
-        current_table = name
-        print(f"Таблица '{name}' создана.")
-    except ValueError as e:
-        print(f"Ошибка: {e}")
-
-
-def _select_table_ui() -> None:
-    global current_table
-    if not memory.DATABASE:
-        print("Таблиц нет. Сначала создайте таблицу.")
-        return
-
-    print("\nДоступные таблицы:")
-    keys = list(memory.DATABASE.keys())
-    for i, name in enumerate(keys, 1):
-        fields = list(memory.SCHEMAS[name].keys())
-        fields.remove("id") 
-        print(f"{i}. {name} (поля: {', '.join(fields)})")
-
-    choice = _read_int("Выберите номер таблицы: ")
-    if 1 <= choice <= len(keys):
-        current_table = keys[choice - 1]
-        print(f"Выбрана таблица: {current_table}")
-    else:
-        print("Ошибка: неверный номер.")
-
-
-def _delete_table_ui() -> None:
-    global current_table
-    if not memory.DATABASE:
-        print("Таблиц нет.")
-        return
-
-    print("\nТаблицы для удаления:")
-    keys = list(memory.DATABASE.keys())
-    for i, name in enumerate(keys, 1):
-        print(f"{i}. {name}")
-
-    choice = _read_int("Номер таблицы для удаления: ")
-    if 1 <= choice <= len(keys):
-        name_to_delete = keys[choice - 1]
-        confirm = input(f"Удалить '{name_to_delete}'? (y/n): ").strip().lower()
-        if confirm == "y":
+    def run(self) -> None:
+        while True:
+            self._print_menu()
+            act = input("Действие: ").strip()
             try:
-                memory.delete_table(name_to_delete)
-                if current_table == name_to_delete:
-                    current_table = None
-                print(f"Таблица '{name_to_delete}' удалена.")
-            except KeyError as e:
-                print(f"Ошибка: {e}")
-        else:
-            print("Отмена.")
-    else:
-        print("Ошибка: неверный номер.")
+                if act == "1": self._create_table()
+                elif act == "2": self._select_table()
+                elif act == "3": self._insert_record()
+                elif act == "4": self._show_all()
+                elif act == "5": self._find_by_filter()
+                elif act == "6": self._update_record()
+                elif act == "7": self._delete_record()
+                elif act == "8": self._drop_table()
+                elif act == "9": self._sort_records()
+                elif act == "10": self._create_index()
+                elif act == "11": self._switch_mode()
+                elif act == "0": break
+                else: print("Неизвестная команда.")
+            except DatabaseError as e: print(f"Ошибка: {e}")
+            except Exception as e: print(f"Критическая ошибка: {e}")
 
+    def _create_table(self) -> None:
+        name = input("Имя таблицы: ").strip()
+        if not name: print("Ошибка: имя не может быть пустым."); return
+        print(f"Типы: {', '.join(AVAILABLE_TYPES)}")
+        raw = input("Поля (имя:тип, ...): ").strip()
+        if not raw: print("Ошибка: укажите поля."); return
+        
+        schema = {}
+        for part in raw.split(","):
+            if ":" in part:
+                f, t = part.strip().split(":", 1)
+                if t.strip().lower() not in AVAILABLE_TYPES:
+                    print(f"Ошибка: тип '{t}' не поддерживается."); return
+                schema[f.strip()] = t.strip().lower()
+            else: schema[part.strip()] = "str"
+            
+        self.db.create_table(name, schema)
+        self.current = name
+        print(f"Таблица '{name}' создана.")
 
-def _ensure_table() -> bool:
-    if not current_table:
-        print("Ошибка: сначала создайте или выберите таблицу.")
-        return False
-    return True
+    def _select_table(self) -> None:
+        tbls = self.db.list_tables()
+        if not tbls: print("Таблиц нет."); return
+        print("\nТаблицы:")
+        for i, t in enumerate(tbls, 1): print(f"  {i}. {t}")
+        c = self._read_int("Номер: ")
+        if 1 <= c <= len(tbls):
+            self.current = tbls[c-1]
+            print(f"Выбрана: '{self.current}'")
 
+    def _insert_record(self) -> None:
+        if not self.current: print("Ошибка: выберите таблицу."); return
+        schema = self.db.get_schema(self.current)
+        print(f"Добавление в '{self.current}' (Enter = пропустить):")
+        kwargs = {f: input(f"  {f} ({t}): ").strip() for f, t in schema.items() if f != "id"}
+        self.db.insert(self.current, **kwargs)
+        print("Запись добавлена.")
 
-def _add_record() -> None:
-    if not _ensure_table():
-        return
+    def _show_all(self) -> None:
+        if not self.current: print("Ошибка: выберите таблицу."); return
+        recs = self.db.select(self.current)
+        print(f"\nЗаписи в '{self.current}':")
+        print("  Пусто." if not recs else "\n".join(f"  {r}" for r in recs))
 
-    schema = memory.SCHEMAS[current_table]
-    fields = [f for f in schema.keys() if f != "id"]
+    def _find_by_filter(self) -> None:
+        if not self.current: print("Ошибка: выберите таблицу."); return
+        schema = self.db.get_schema(self.current)
+        print("Фильтр (Enter = пропустить):")
+        filters = {f: v for f in schema if (v := input(f"  {f}: ").strip())}
+        recs = self.db.select(self.current, **filters)
+        print(f"  Найдено: {len(recs)}" if recs else "  Ничего не найдено.")
+        for r in recs: print(f"  {r}")
 
-    print(f"\nДобавление записи в '{current_table}'")
-    print("(Enter - оставить пустым)")
-
-    kwargs = {}
-    for field in fields:
-        field_type = schema[field]
-        val = input(f"{field} ({field_type}): ").strip()
-        kwargs[field] = val
-
-    try:
-        record = memory.create_record(current_table, kwargs)
-        print(f"Запись добавлена: {record}")
-    except (ValueError, KeyError) as e:
-        print(f"Ошибка: {e}")
-
-
-def _show_all() -> None:
-    if not _ensure_table():
-        return
-    print(f"\nВсе записи в '{current_table}':")
-    records = memory.select_record(current_table)
-    if not records:
-        print("Записей нет.")
-    for r in records:
-        print(r)
-
-
-def _find_by_filter() -> None:
-    if not _ensure_table():
-        return
-
-    schema = memory.SCHEMAS[current_table]
-    fields = list(schema.keys())
-
-    print(f"\nПоиск в '{current_table}'")
-    print("(Enter - пропустить поле)")
-
-    filters = {}
-    for field in fields:
-        val = input(f"{field}: ").strip()
-        if val:
-            filters[field] = val
-
-    try:
-        records = memory.select_record(current_table, **filters)
-        print(f"\nНайдено: {len(records)}")
-        for r in records:
-            print(r)
-    except (ValueError, KeyError) as e:
-        print(f"Ошибка: {e}")
-
-
-def _update_record() -> None:
-    if not _ensure_table():
-        return
-
-    schema = memory.SCHEMAS[current_table]
-    fields = [f for f in schema.keys() if f != "id"]
-
-    record_id = _read_int("ID записи для обновления: ")
-    print("Новые данные (Enter - не менять):")
-
-    kwargs = {}
-    for field in fields:
-        val = input(f"{field}: ").strip()
-        if val:
-            kwargs[field] = val
-
-    if not kwargs:
-        print("Отмена.")
-        return
-
-    try:
-        memory.update_record(current_table, record_id, **kwargs)
+    def _update_record(self) -> None:
+        if not self.current: print("Ошибка: выберите таблицу."); return
+        rid = self._read_int("ID записи: ")
+        schema = self.db.get_schema(self.current)
+        print("Новые данные (Enter = не менять):")
+        kwargs = {f: v for f in schema if f != "id" and (v := input(f"  {f}: ").strip())}
+        if not kwargs: print("Ошибка: нет данных для обновления."); return
+        self.db.update(self.current, rid, **kwargs)
         print("Запись обновлена.")
-    except (ValueError, KeyError) as e:
-        print(f"Ошибка: {e}")
 
-
-def _delete_record() -> None:
-    if not _ensure_table():
-        return
-    print(f"\nУдаление записи из '{current_table}'")
-    record_id = _read_int("ID записи: ")
-    try:
-        memory.delete_record(current_table, record_id)
+    def _delete_record(self) -> None:
+        if not self.current: print("Ошибка: выберите таблицу."); return
+        self.db.delete(self.current, self._read_int("ID записи: "))
         print("Запись удалена.")
-    except (ValueError, KeyError) as e:
-        print(f"Ошибка: {e}")
 
+    def _drop_table(self) -> None:
+        tbls = self.db.list_tables()
+        if not tbls: print("Таблиц нет."); return
+        print("\nУдаление:")
+        for i, t in enumerate(tbls, 1): print(f"  {i}. {t}")
+        c = self._read_int("Номер: ")
+        if 1 <= c <= len(tbls):
+            name = tbls[c-1]
+            if input(f"Удалить '{name}'? (y/n): ").strip().lower() == "y":
+                self.db.drop_table(name)
+                if self.current == name: self.current = None
+                print(f"Таблица '{name}' удалена.")
 
-def run() -> None:
-    """Запуск основного цикла интерфейса."""
-    while True:
-        try:
-            _print_menu()
-            action = input("Выберите действие: ").strip()
+    def _sort_records(self) -> None:
+        if not self.current: print("Ошибка: выберите таблицу."); return
+        schema = self.db.get_schema(self.current)
+        field = input("Поле: ").strip()
+        if field not in schema: print("Ошибка: поле не найдено."); return
+        rev = input("По убыванию? (y/n): ").strip().lower() == "y"
+        for r in self.db.sort(self.current, field, rev): print(f"  {r}")
 
-            if action == "1":
-                _create_table_ui()
-            elif action == "2":
-                _select_table_ui()
-            elif action == "3":
-                _add_record()
-            elif action == "4":
-                _show_all()
-            elif action == "5":
-                _find_by_filter()
-            elif action == "6":
-                _update_record()
-            elif action == "7":
-                _delete_record()
-            elif action == "8":
-                _delete_table_ui()
-            elif action == "0":
-                print("Выход из программы.")
-                break
-            else:
-                print("Неизвестная команда.")
-        except KeyboardInterrupt:
-            print("\nВыход.")
-            break
-        except (ValueError, KeyError) as e:
-            print(f"Ошибка: {e}")
+    def _create_index(self) -> None:
+        if not self.current: print("Ошибка: выберите таблицу."); return
+        schema = self.db.get_schema(self.current)
+        field = input("Поле для индекса: ").strip()
+        if field not in schema: print("Ошибка: поле не найдено."); return
+        self.db.create_index(self.current, field)
+        print(f"Индекс по '{field}' создан.")
+
+    def _switch_mode(self) -> None:
+        print("\nРежимы: 1.Memory  2.JSON  3.CSV")
+        ch = input("Выбор: ").strip()
+        self.db = JSONDatabase() if ch == "2" else (CSVDatabase() if ch == "3" else MemoryDatabase())
+        self.current = None
+        print(f"Режим: {self._get_mode_name()}. Таблица сброшена.")
