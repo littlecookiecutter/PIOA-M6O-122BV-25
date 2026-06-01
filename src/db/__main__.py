@@ -1,8 +1,9 @@
-from .tui import run
+from .tui import DatabaseApp
 
 
-def main():
-    run()
+def main() -> None:
+    app = DatabaseApp()
+    app.run()
 
 
 if __name__ == "__main__":

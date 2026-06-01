@@ -1,154 +1,213 @@
 from typing import Any
 
+from .errors import (
+    DatabaseError,
+    DuplicateIDError,
+    InvalidTypeError,
+    RecordNotFoundError,
+    TableNotFoundError,
+)
 
-DATABASE: dict[str, list[tuple]] = {}
-SCHEMAS: dict[str, dict[str, str]] = {}
+
+def _cast_str(val: str) -> str:
+    return val.strip()
+
+def _cast_int(val: str) -> int:
+    return int(val)
+
+def _cast_int_pos(val: str) -> int:
+    v = int(val)
+    if v < 0:
+        raise InvalidTypeError("Ожидается неотрицательное целое число (>= 0)")
+    return v
+
+def _cast_int_neg(val: str) -> int:
+    v = int(val)
+    if v > 0:
+        raise InvalidTypeError("Ожидается неположительное целое число (<= 0)")
+    return v
+
+def _cast_float(val: str) -> float:
+    return float(val)
+
+def _cast_float_pos(val: str) -> float:
+    v = float(val)
+    if v < 0:
+        raise InvalidTypeError("Ожидается неотрицательное число (>= 0.0)")
+    return v
+
+def _cast_float_neg(val: str) -> float:
+    v = float(val)
+    if v > 0:
+        raise InvalidTypeError("Ожидается неположительное число (<= 0.0)")
+    return v
+
+def _cast_bool(val: str) -> bool:
+    norm = val.strip().lower()
+    if norm in ("true", "1", "yes", "да", "on"):
+        return True
+    if norm in ("false", "0", "no", "нет", "off"):
+        return False
+    raise InvalidTypeError("Ожидается логическое значение (true/false, 1/0, yes/no)")
+
 
 TYPE_MAP = {
-    "str": str,
-    "int": int,
-    "float": float,
+    "str": _cast_str,
+    "int": _cast_int,
+    "int_pos": _cast_int_pos,
+    "int_neg": _cast_int_neg,
+    "float": _cast_float,
+    "float_pos": _cast_float_pos,
+    "float_neg": _cast_float_neg,
+    "bool": _cast_bool,
 }
 
 
-def create_table(table_name: str, fields_input: str) -> None:
-    """Создаёт таблицу с полями и типами."""
-    if table_name in DATABASE:
-        raise ValueError(f"Таблица '{table_name}' уже существует.")
+class Table:
+    def __init__(self, name: str, schema: dict[str, str]) -> None:
+        self.name = name
+        self.schema = {"id": "int", **schema}
+        self._records: list[tuple] = []
+        self._next_id = 1
 
-    schema = {}
-    raw_fields = [f.strip() for f in fields_input.split(",") if f.strip()]
+    def _cast(self, value: str, target_type: str) -> Any:
+        if value == "":
+            return None
+        try:
+            converter = TYPE_MAP[target_type]
+            return converter(value)
+        except KeyError:
+            raise InvalidTypeError(f"Неизвестный тип: {target_type}")
+        except ValueError:
+            raise InvalidTypeError(f"Не удалось преобразовать '{value}' к типу {target_type}")
 
-    if not raw_fields:
-        raise ValueError("Список полей не может быть пустым.")
+    def create_record(self, **kwargs) -> tuple:
+        for field in kwargs:
+            if field not in self.schema:
+                raise InvalidTypeError(f"Поле '{field}' отсутствует в схеме.")
 
-    for field in raw_fields:
-        if ":" in field:
-            name, type_name = field.split(":", 1)
-            type_name = type_name.strip().lower()
-            if type_name not in TYPE_MAP:
-                raise ValueError(f"Неподдерживаемый тип: {type_name}. Используйте str, int или float.")
-            schema[name.strip()] = type_name
-        else:
-            schema[field] = "str"
+        for field, raw in kwargs.items():
+            kwargs[field] = self._cast(raw, self.schema[field])
 
-    final_schema = {"id": "int", **schema}
-    SCHEMAS[table_name] = final_schema
-    DATABASE[table_name] = []
+        if self._next_id in (r[0] for r in self._records):
+            raise DuplicateIDError(f"Запись с id={self._next_id} уже существует.")
+
+        fields = [f for f in self.schema if f != "id"]
+        record = (self._next_id,) + tuple(kwargs.get(f) for f in fields)
+        self._records.append(record)
+        self._next_id += 1
+        return record
+
+    def select_record(self, **filters) -> list[tuple]:
+        if not filters:
+            return self._records.copy()
+
+        result = []
+        for row in self._records:
+            match = True
+            for field, val in filters.items():
+                if field not in self.schema:
+                    raise InvalidTypeError(
+                        f"Поле '{field}' отсутствует в схеме таблицы '{self.name}'."
+                    )
+                
+                try:
+                    typed_val = self._cast(str(val), self.schema[field])
+                except InvalidTypeError:
+                    raise InvalidTypeError(
+                        f"Неверный тип значения для поля '{field}'. "
+                        f"Ожидался тип {self.schema[field]}."
+                    )
+                
+                idx = list(self.schema.keys()).index(field)
+                if row[idx] != typed_val:
+                    match = False
+                    break
+            if match:
+                result.append(row)
+        return result
+
+    def update_record(self, record_id: int, **kwargs) -> None:
+        for i, row in enumerate(self._records):
+            if row[0] == record_id:
+                new_row = list(row)
+                for field, raw in kwargs.items():
+                    if field in self.schema:
+                        if field == "id":
+                            raise DatabaseError(
+                                "Поле 'id' является системным и не может быть изменено."
+                            )
+                        idx = list(self.schema.keys()).index(field)
+                        new_row[idx] = self._cast(raw, self.schema[field])
+                self._records[i] = tuple(new_row)
+                return
+        raise RecordNotFoundError(f"Запись с id={record_id} не найдена.")
+
+    def delete_record(self, record_id: int) -> None:
+        for i, row in enumerate(self._records):
+            if row[0] == record_id:
+                self._records.pop(i)
+                return
+        raise RecordNotFoundError(f"Запись с id={record_id} не найдена.")
+
+    def sort_records(self, field: str, reverse: bool = False) -> list[tuple]:
+        if field not in self.schema:
+            raise InvalidTypeError(f"Поле '{field}' отсутствует в схеме.")
+        idx = list(self.schema.keys()).index(field)
+        return sorted(self._records, key=lambda r: (r[idx] is None, r[idx]), reverse=reverse)
 
 
-def _get_next_id(table_name: str) -> int:
-    """Генерирует следующий ID."""
-    if not DATABASE[table_name]:
-        return 1
-    return max(row[0] for row in DATABASE[table_name]) + 1
+class Database:
+    def __init__(self) -> None:
+        self._tables: dict[str, Table] = {}
 
-
-def _cast_value(value: str, target_type: str) -> Any:
-    """Приводит значение к нужному типу."""
-    if value == "":
-        return None
-    
-    try:
-        converter = TYPE_MAP[target_type]
-        return converter(value)
-    except ValueError:
-        raise ValueError(f"Некорректный тип данных. Ожидалось: {target_type}.")
-
-
-def create_record(table_name: str, values_dict: dict[str, str]) -> tuple:
-    """Добавляет запись с проверкой типов."""
-    if table_name not in DATABASE:
-        raise KeyError(f"Таблица '{table_name}' не найдена.")
-
-    schema = SCHEMAS[table_name]
-    record_id = _get_next_id(table_name)
-    
-    processed_values = []
-    fields = [f for f in schema.keys() if f != "id"]
-    
-    for field in fields:
-        raw_val = values_dict.get(field, "")
-        expected_type = schema[field]
-        val = _cast_value(raw_val, expected_type)
-        processed_values.append(val)
+    def create_table(self, name: str, fields_input: str) -> None:
+        if name in self._tables:
+            raise DatabaseError(f"Таблица '{name}' уже существует.")
         
-    full_record = (record_id,) + tuple(processed_values)
-    DATABASE[table_name].append(full_record)
-    return full_record
+        if not name.strip():
+            raise DatabaseError("Имя таблицы не может быть пустым.")
 
-
-def select_record(table_name: str, **filters) -> list[tuple]:
-    """Выборка с фильтрацией и проверкой типов."""
-    if table_name not in DATABASE:
-        raise KeyError(f"Таблица '{table_name}' не найдена.")
-
-    data = DATABASE[table_name]
-    schema = SCHEMAS[table_name]
-    
-    if not filters:
-        return data.copy()
-
-    result = []
-    for row in data:
-        match = True
-        for field, val in filters.items():
-            if field not in schema:
+        schema = {}
+        for part in fields_input.split(","):
+            part = part.strip()
+            if not part:
                 continue
-            
-            expected_type = schema[field]
-            try:
-                typed_val = _cast_value(str(val), expected_type)
-            except ValueError:
-                raise ValueError(
-                    f"Фильтр по полю '{field}' ожидает тип {expected_type}, получено: {val}"
-                )
+            if ":" in part:
+                fname, ftype = part.split(":", 1)
+                fname = fname.strip()
+                ftype = ftype.strip().lower()
+                
+                if fname == "id":
+                    raise DatabaseError(
+                        "Поле 'id' является системным и не может быть задано пользователем."
+                    )
+                
+                if ftype not in TYPE_MAP:
+                    raise InvalidTypeError(f"Неподдерживаемый тип: {ftype}")
+                
+                if fname in schema:
+                    raise DatabaseError(f"Поле '{fname}' уже определено в схеме.")
+                
+                schema[fname] = ftype
+            else:
+                field_name = part.strip()
+                if field_name == "id":
+                    raise DatabaseError(
+                        "Поле 'id' является системным и не может быть задано пользователем."
+                    )
+                if field_name in schema:
+                    raise DatabaseError(f"Поле '{field_name}' уже определено в схеме.")
+                schema[field_name] = "str"
 
-            idx = list(schema.keys()).index(field)
-            if row[idx] != typed_val:
-                match = False
-                break
-        if match:
-            result.append(row)
-    return result
+        self._tables[name] = Table(name, schema)
 
+    def delete_table(self, name: str) -> None:
+        if name not in self._tables:
+            raise TableNotFoundError(f"Таблица '{name}' не найдена.")
+        del self._tables[name]
 
-def update_record(table_name: str, record_id: int, **kwargs) -> None:
-    """Обновление записи с проверкой типов."""
-    if table_name not in DATABASE:
-        raise KeyError(f"Таблица '{table_name}' не найдена.")
-
-    schema = SCHEMAS[table_name]
-    
-    for i, row in enumerate(DATABASE[table_name]):
-        if row[0] == record_id:
-            new_row = list(row)
-            for field, raw_val in kwargs.items():
-                if field in schema:
-                    new_val = _cast_value(raw_val, schema[field])
-                    idx = list(schema.keys()).index(field)
-                    new_row[idx] = new_val
-            
-            DATABASE[table_name][i] = tuple(new_row)
-            return
-    raise ValueError(f"Запись с id={record_id} не найдена.")
-
-
-def delete_record(table_name: str, record_id: int) -> None:
-    """Удаление по ID."""
-    if table_name not in DATABASE:
-        raise KeyError(f"Таблица '{table_name}' не найдена.")
-
-    for i, row in enumerate(DATABASE[table_name]):
-        if row[0] == record_id:
-            DATABASE[table_name].pop(i)
-            return
-    raise ValueError(f"Запись с id={record_id} не найдена.")
-
-
-def delete_table(table_name: str) -> None:
-    """Удаление таблицы."""
-    if table_name not in DATABASE:
-        raise KeyError(f"Таблица '{table_name}' не найдена.")
-    del DATABASE[table_name]
-    del SCHEMAS[table_name]
+    def get_table(self, name: str) -> Table:
+        if name not in self._tables:
+            raise TableNotFoundError(f"Таблица '{name}' не найдена.")
+        return self._tables[name]
