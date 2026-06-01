@@ -77,7 +77,7 @@ python -m src.db
 pip install pytest pytest-cov
 
 # Запуск тестов с отчётом по покрытию ВСЕГО проекта (backend + tui)
-pytest tests/ --cov=src --cov-report=term-missing
+python -m pytest tests/ --cov=src --cov-report=term-missing
 ```
 Цель: общее покрытие `TOTAL` не менее 80%. Тесты покрывают бизнес-логику, файловые операции, обработку ошибок, индексы и консольный интерфейс.
 
