@@ -21,19 +21,12 @@ class CSVDatabase(Database):
 
     @staticmethod
     def _parse_csv_row(row: dict, schema: dict[str, str]) -> dict:
-        parsed = {"id": int(row.get("id", 0))}
+        parsed = {}
         for key, val in row.items():
-            if key == "id" or key not in schema:
-                continue
-            try:
-                t = schema[key]
-                if t == "str": parsed[key] = val
-                elif t == "int": parsed[key] = int(val)
-                elif t == "float": parsed[key] = float(val)
-                elif t == "bool": parsed[key] = val.lower() in ("true", "1", "yes", "on", "да")
-                else: parsed[key] = val
-            except ValueError:
-                parsed[key] = val
+            if key == "id":
+                parsed[key] = int(val)
+            elif key in schema:
+                parsed[key] = Table._cast(val, schema[key])
         return parsed
 
     def _load_table(self, name: str) -> Table:
@@ -41,12 +34,16 @@ class CSVDatabase(Database):
         if not csv_p.exists():
             raise TableNotFoundError(f"Таблица '{name}' не найдена.")
         try:
+            if not meta_p.exists():
+                raise FileNotFoundError("Отсутствует метафайл")
             with meta_p.open("r", encoding="utf-8") as f:
                 meta = json.load(f)
+            if not isinstance(meta, dict) or "schema" not in meta or "next_id" not in meta:
+                raise ValueError("Некорректный метафайл")
             with csv_p.open("r", encoding="utf-8") as f:
                 records = [self._parse_csv_row(row, meta["schema"]) for row in csv.DictReader(f)]
             return Table.from_dict(name, {**meta, "records": records})
-        except (json.JSONDecodeError, csv.Error) as e:
+        except (json.JSONDecodeError, csv.Error, KeyError, ValueError, FileNotFoundError) as e:
             raise CorruptedDataError(f"Битые данные: {e}")
 
     def _save_table(self, name: str, table: Table) -> None:

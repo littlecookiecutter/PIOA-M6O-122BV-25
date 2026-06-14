@@ -1,0 +1,30 @@
+{
+  schema: {
+    "name": "str",
+    "age": "int_pos"
+  },
+  "records": [
+    {
+      "id": 1,
+      "name": "Alice_Upd",
+      "age": 25
+    },
+    {
+      "id": 2,
+      "name": "Bob",
+      "age": 40
+    }
+  ],
+  "next_id": 3,
+  "indexes": {
+    "age": {
+      "25": [
+        0
+      ],
+      "30": [],
+      "40": [
+        1
+      ]
+    }
+  }
+}

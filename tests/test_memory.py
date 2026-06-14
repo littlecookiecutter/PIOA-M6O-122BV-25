@@ -2,7 +2,7 @@ import unittest
 import tempfile
 import json
 import pathlib
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from src.db.backend.memory import MemoryDatabase
 from src.db.backend.json_db import JSONDatabase
@@ -92,19 +92,35 @@ class TestIndexing(unittest.TestCase):
         table.insert(val="10")
         table.insert(val="20")
         
-        # Обновление: значение меняется, индекс должен обновиться
         table.update(1, val="30")
-        # Ищем по целому числу, так как _cast преобразует "30" -> 30
         res = table.select(val=30)
         self.assertEqual(len(res), 1)
         
-        res = table.select(val=10)  # старое значение не должно находиться
+        res = table.select(val=10)
         self.assertEqual(len(res), 0)
         
-        # Удаление: индекс должен уменьшиться
         table.delete(2)
         res = table.select(val=30)
         self.assertEqual(len(res), 1)
+
+    def test_multi_index_persistence(self):
+        with tempfile.TemporaryDirectory() as d:
+            db = JSONDatabase(d)
+            db.create_table("t", {"name": "str", "age": "int", "score": "float"})
+            db.insert("t", name="A", age="20", score="9.5")
+            db.insert("t", name="B", age="25", score="8.0")
+            
+            db.create_index("t", "age")
+            db.create_index("t", "score")
+            
+            # Перезапуск
+            db2 = JSONDatabase(d)
+            res1 = db2.select("t", age=20)
+            res2 = db2.select("t", score=8.0)
+            self.assertEqual(len(res1), 1)
+            self.assertEqual(len(res2), 1)
+            self.assertEqual(res1[0]["name"], "A")
+            self.assertEqual(res2[0]["name"], "B")
 
 
 class TestTUI(unittest.TestCase):
@@ -131,7 +147,6 @@ class TestTUI(unittest.TestCase):
         self._run_flow(["11", "2", "0"])
 
     def test_switch_mode_error(self):
-        # Тест для покрытия except в _switch_mode
         self._run_flow(["11", "invalid", "0"])
 
     def test_error_handling_empty_name(self):
@@ -165,9 +180,8 @@ class TestEdgeCases(unittest.TestCase):
     def test_table_select_with_unknown_filter_field(self):
         table = Table("t", {"name": "str"})
         table.insert(name="A")
-        # Фильтр по несуществующему полю игнорируется
-        res = table.select(unknown="X")
-        self.assertEqual(len(res), 1)
+        with self.assertRaises(InvalidTypeError):
+            table.select(unknown="X")
     
     def test_csv_parse_with_extra_columns(self):
         with tempfile.TemporaryDirectory() as d:

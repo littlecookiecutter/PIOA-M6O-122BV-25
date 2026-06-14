@@ -1,0 +1,1 @@
+{"schema": {"item": "str", "profit": "float_pos", "debt": "int_neg"}, "next_id": 3, "indexes": {}}

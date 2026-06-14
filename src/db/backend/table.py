@@ -14,19 +14,20 @@ class Table:
         if value is None or value == "":
             return None
         try:
-            if target_type == "str": return str(value).strip()
-            if target_type == "int": return int(value)
-            if target_type == "float": return float(value)
-            if target_type == "bool": return str(value).lower() in ("true", "1", "yes", "on", "да")
+            val_str = str(value).strip()
+            if target_type == "str": return val_str
+            if target_type == "int": return int(val_str)
+            if target_type == "float": return float(val_str)
+            if target_type == "bool": return val_str.lower() in ("true", "1", "yes", "on", "да")
             
             if target_type in ("int_pos", "int_neg"):
-                v = int(value)
+                v = int(val_str)
                 if target_type == "int_pos" and v < 0: raise ValueError
                 if target_type == "int_neg" and v > 0: raise ValueError
                 return v
                 
             if target_type in ("float_pos", "float_neg"):
-                v = float(value)
+                v = float(val_str)
                 if target_type == "float_pos" and v < 0: raise ValueError
                 if target_type == "float_neg" and v > 0: raise ValueError
                 return v
@@ -49,19 +50,22 @@ class Table:
         if not filters:
             return [r.copy() for r in self._records]
 
-        # Игнорируем поля, которых нет в схеме
-        valid_filters = {k: v for k, v in filters.items() if k in self.schema}
-        if not valid_filters:
-            return [r.copy() for r in self._records]
+        casted_filters = {}
+        for k, v in filters.items():
+            if k == "id":
+                casted_filters[k] = int(v)
+            elif k in self.schema:
+                casted_filters[k] = self._cast(v, self.schema[k])
+            else:
+                raise InvalidTypeError(f"Поле '{k}' отсутствует в схеме.")
 
-        idx_field = next((f for f in valid_filters if f in self._indexes), None)
+        idx_field = next((f for f in casted_filters if f in self._indexes), None)
         if idx_field:
-            # Приводим значение фильтра к типу схемы для поиска
-            val = self._cast(valid_filters[idx_field], self.schema[idx_field])
+            val = casted_filters[idx_field]
             candidates = [self._records[i] for i in self._indexes[idx_field].get(val, [])]
-            return [r.copy() for r in candidates if all(r.get(k) == v for k, v in valid_filters.items())]
+            return [r.copy() for r in candidates if all(r.get(k) == v for k, v in casted_filters.items())]
 
-        return [r.copy() for r in self._records if all(r.get(k) == v for k, v in valid_filters.items())]
+        return [r.copy() for r in self._records if all(r.get(k) == v for k, v in casted_filters.items())]
 
     def update(self, record_id: int, **kwargs) -> None:
         for i, rec in enumerate(self._records):
@@ -95,28 +99,46 @@ class Table:
             self._indexes[field].setdefault(rec.get(field), []).append(i)
 
     def _update_indexes(self, action: str, rec: dict, idx: int, old: dict | None = None) -> None:
-        for field, index in self._indexes.items():
+        for field, idx_dict in self._indexes.items():
             if action == "insert":
-                index.setdefault(rec.get(field), []).append(idx)
+                idx_dict.setdefault(rec.get(field), []).append(idx)
             elif action == "delete":
                 val = rec.get(field)
-                if val in index:
-                    index[val].remove(idx)
-                    index[val] = [i - 1 if i > idx else i for i in index[val]]
+                if val in idx_dict:
+                    idx_dict[val].remove(idx)
+                    idx_dict[val] = [i - 1 if i > idx else i for i in idx_dict[val]]
             elif action == "update" and old:
-                for f in self._indexes:
-                    ov, nv = old.get(f), rec.get(f)
-                    if ov != nv:
-                        if ov in index: index[ov].remove(idx)
-                        index.setdefault(nv, []).append(idx)
-                    else:
-                        index[nv] = [i - 1 if i > idx else i for i in index[nv]]
+                ov, nv = old.get(field), rec.get(field)
+                if ov != nv:
+                    if ov in idx_dict:
+                        idx_dict[ov].remove(idx)
+                    idx_dict.setdefault(nv, []).append(idx)
+                else:
+                    idx_dict[nv] = [i - 1 if i > idx else i for i in idx_dict[nv]]
 
     def to_dict(self) -> dict:
         return {"schema": self.schema, "records": self._records, "next_id": self._next_id, "indexes": self._indexes}
 
     @classmethod
     def from_dict(cls, name: str, data: dict) -> "Table":
-        t = cls(name, data["schema"], data["records"], data["next_id"])
-        t._indexes = data.get("indexes", {})
+        if not isinstance(data.get("schema"), dict) or not isinstance(data.get("records"), list):
+            raise KeyError("Некорректная структура данных таблицы")
+        
+        t = cls(name, data["schema"], data["records"], data.get("next_id", 1))
+        raw_indexes = data.get("indexes", {})
+        t._indexes = {}
+        for field, idx_map in raw_indexes.items():
+            if field in t.schema:
+                cast_type = int if t.schema[field] in ("int", "int_pos", "int_neg") else \
+                            float if t.schema[field] in ("float", "float_pos", "float_neg") else \
+                            bool if t.schema[field] == "bool" else str
+                normalized = {}
+                for k, v in idx_map.items():
+                    try:
+                        normalized[cast_type(k)] = v
+                    except (ValueError, TypeError):
+                        normalized[k] = v
+                t._indexes[field] = normalized
+            else:
+                t._indexes[field] = idx_map
         return t

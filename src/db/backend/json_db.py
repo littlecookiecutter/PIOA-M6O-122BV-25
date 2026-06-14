@@ -25,8 +25,12 @@ class JSONDatabase(Database):
         try:
             with p.open("r", encoding="utf-8") as f:
                 data = json.load(f)
+            if not isinstance(data, dict) or "schema" not in data or "records" not in data:
+                raise ValueError("Отсутствуют обязательные поля schema/records")
+            if not isinstance(data["schema"], dict) or not isinstance(data["records"], list):
+                raise ValueError("Некорректный тип данных schema или records")
             return Table.from_dict(name, data)
-        except (json.JSONDecodeError, KeyError) as e:
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
             raise CorruptedDataError(f"Битые данные: {e}")
 
     def _save_table(self, name: str, table: Table) -> None:
